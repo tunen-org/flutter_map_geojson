@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geojson_vi/geojson_vi.dart';
 import 'package:latlong2/latlong.dart';
 
 typedef MarkerCreationCallback = Marker Function(
@@ -24,14 +24,13 @@ typedef FilterFunction = bool Function(Map<String, dynamic> properties);
 /// One should pass these lists when creating adequate layers in flutter_map.
 /// For details see example.
 ///
-/// Currently GeoJson parser supports only FeatureCollection and not GeometryCollection.
-/// See the GeoJson Format specification at: https://www.rfc-editor.org/rfc/rfc7946
-///
-/// For creation of [Marker], [Polyline], [CircleMarker] and [Polygon] objects the default callback functions
-/// are provided which are used in case when no user-defined callback function is provided.
-/// To fully customize the  [Marker], [Polyline], [CircleMarker] and [Polygon] creation one has to write his own
-/// callback functions. As a template the default callback functions can be used.
-///
+/// For creation of [Marker], [Polyline], [CircleMarker] and [Polygon] objects
+/// the default callback functions are provided which are used in case when no
+/// user-defined callback function is provided.
+/// To fully customize the [Marker], [Polyline], [CircleMarker] and [Polygon]
+/// creation one has to write his own callback functions. As a template the
+/// default callback functions can be used.
+
 class GeoJsonParser {
   /// list of [Marker] objects created as result of parsing
   final List<Marker> markers = [];
@@ -123,7 +122,7 @@ class GeoJsonParser {
 
   /// parse GeJson in [String] format
   void parseGeoJsonAsString(String g) {
-    return parseGeoJson(jsonDecode(g) as Map<String, dynamic>);
+    return parseGeoJson(GeoJSON.fromJSON(g));
   }
 
   /// set default [Marker] color
@@ -184,7 +183,7 @@ class GeoJsonParser {
   }
 
   /// main GeoJson parsing function
-  void parseGeoJson(Map<String, dynamic> g) {
+  void parseGeoJson(GeoJSON g) {
     // set default values if they are not specified by constructor
     markerCreationCallback ??= createDefaultMarker;
     circleMarkerCreationCallback ??= createDefaultCircleMarker;
@@ -203,125 +202,122 @@ class GeoJsonParser {
     defaultCircleMarkerBorderColor ??= Colors.black.withOpacity(0.8);
     defaultCircleMarkerIsFilled ??= true;
 
-    // loop through the GeoJson Map and parse it
-    for (Map f in g['features'] as List) {
-      String geometryType = f['geometry']['type'].toString();
-      // check if this spatial object passes the filter function
-      if (!filterFunction!(f['properties'] as Map<String, dynamic>)) {
-        continue;
-      }
-      switch (geometryType) {
-        case 'Point':
-          {
+    switch (g.type) {
+      case GeoJSONType.featureCollection:
+        {
+          for (final feature in (g as GeoJSONFeatureCollection).features) {
+            parseGeoJson(feature!.geometry!);
+          }
+        }
+        break;
+      case GeoJSONType.feature:
+        {
+          parseGeoJson((g as GeoJSONFeature).geometry!);
+        }
+        break;
+      case GeoJSONType.geometryCollection:
+        {
+          for (final geometry in (g as GeoJSONGeometryCollection).geometries) {
+            parseGeoJson(geometry);
+          }
+        }
+        break;
+      case GeoJSONType.point:
+        {
+          final GeoJSONPoint? point = g as GeoJSONPoint?;
+          markers.add(
+            markerCreationCallback!(
+                LatLng(point!.coordinates[1], point.coordinates[0]), {}),
+          );
+        }
+        break;
+      case GeoJSONType.multiPoint:
+        {
+          final GeoJSONMultiPoint? multiPoint = g as GeoJSONMultiPoint?;
+          for (final point in multiPoint!.coordinates) {
             markers.add(
-              markerCreationCallback!(
-                  LatLng(f['geometry']['coordinates'][1] as double,
-                      f['geometry']['coordinates'][0] as double),
-                  f['properties'] as Map<String, dynamic>),
+              markerCreationCallback!(LatLng(point[1], point[0]), {}),
             );
           }
-          break;
-        case 'Circle':
-          {
-            circles.add(
-              circleMarkerCreationCallback!(
-                  LatLng(f['geometry']['coordinates'][1] as double,
-                      f['geometry']['coordinates'][0] as double),
-                  f['properties'] as Map<String, dynamic>),
-            );
+        }
+        break;
+      case GeoJSONType.lineString:
+        {
+          final GeoJSONLineString? lineString = g as GeoJSONLineString?;
+          final List<LatLng> line = [];
+          for (final coords in lineString!.coordinates) {
+            line.add(LatLng(coords[1], coords[0]));
           }
-          break;
-        case 'MultiPoint':
-          {
-            for (final point in f['geometry']['coordinates'] as List) {
-              markers.add(
-                markerCreationCallback!(
-                    LatLng(point[1] as double, point[0] as double),
-                    f['properties'] as Map<String, dynamic>),
-              );
+          polylines.add(polyLineCreationCallback!(line, {}));
+        }
+        break;
+      case GeoJSONType.multiLineString:
+        {
+          final GeoJSONMultiLineString? multiLineString =
+              g as GeoJSONMultiLineString?;
+          for (final lineString in multiLineString!.coordinates) {
+            final List<LatLng> line = [];
+            for (final coords in lineString) {
+              line.add(LatLng(coords[1], coords[0]));
             }
+            polylines.add(polyLineCreationCallback!(line, {}));
           }
-          break;
-        case 'LineString':
-          {
-            final List<LatLng> lineString = [];
-            for (final coords in f['geometry']['coordinates'] as List) {
-              lineString.add(LatLng(coords[1] as double, coords[0] as double));
-            }
-            polylines.add(polyLineCreationCallback!(
-                lineString, f['properties'] as Map<String, dynamic>));
-          }
-          break;
-        case 'MultiLineString':
-          {
-            for (final line in f['geometry']['coordinates'] as List) {
-              final List<LatLng> lineString = [];
-              for (final coords in line as List) {
-                lineString
-                    .add(LatLng(coords[1] as double, coords[0] as double));
+        }
+        break;
+      case GeoJSONType.polygon:
+        {
+          final GeoJSONPolygon? polygon = g as GeoJSONPolygon?;
+          final List<LatLng> outerRing = [];
+          final List<List<LatLng>> holesList = [];
+          int pathIndex = 0;
+          for (final path in polygon!.coordinates) {
+            final List<LatLng> hole = [];
+            for (final coords in path) {
+              if (pathIndex == 0) {
+                // add to polygon's outer ring
+                outerRing.add(LatLng(coords[1], coords[0]));
+              } else {
+                // add it to current hole
+                hole.add(LatLng(coords[1], coords[0]));
               }
-              polylines.add(polyLineCreationCallback!(
-                  lineString, f['properties'] as Map<String, dynamic>));
             }
+            if (pathIndex > 0) {
+              // add hole to the polygon's list of holes
+              holesList.add(hole);
+            }
+            pathIndex++;
           }
-          break;
-        case 'Polygon':
-          {
+          polygons.add(polygonCreationCallback!(outerRing, holesList, {}));
+        }
+        break;
+      case GeoJSONType.multiPolygon:
+        {
+          final GeoJSONMultiPolygon? multiPolygon = g as GeoJSONMultiPolygon?;
+          for (final polygon in multiPolygon!.coordinates) {
             final List<LatLng> outerRing = [];
             final List<List<LatLng>> holesList = [];
             int pathIndex = 0;
-            for (final path in f['geometry']['coordinates'] as List) {
-              final List<LatLng> hole = [];
-              for (final coords in path as List<dynamic>) {
+            for (final path in polygon) {
+              List<LatLng> hole = [];
+              for (final coords in path) {
                 if (pathIndex == 0) {
                   // add to polygon's outer ring
-                  outerRing
-                      .add(LatLng(coords[1] as double, coords[0] as double));
+                  outerRing.add(LatLng(coords[1], coords[0]));
                 } else {
-                  // add it to current hole
-                  hole.add(LatLng(coords[1] as double, coords[0] as double));
+                  // add it to a hole
+                  hole.add(LatLng(coords[1], coords[0]));
                 }
               }
               if (pathIndex > 0) {
-                // add hole to the polygon's list of holes
+                // add to polygon's list of holes
                 holesList.add(hole);
               }
               pathIndex++;
             }
-            polygons.add(polygonCreationCallback!(
-                outerRing, holesList, f['properties'] as Map<String, dynamic>));
+            polygons.add(polygonCreationCallback!(outerRing, holesList, {}));
           }
-          break;
-        case 'MultiPolygon':
-          {
-            for (final polygon in f['geometry']['coordinates'] as List) {
-              final List<LatLng> outerRing = [];
-              final List<List<LatLng>> holesList = [];
-              int pathIndex = 0;
-              for (final path in polygon as List) {
-                List<LatLng> hole = [];
-                for (final coords in path as List<dynamic>) {
-                  if (pathIndex == 0) {
-                    // add to polygon's outer ring
-                    outerRing
-                        .add(LatLng(coords[1] as double, coords[0] as double));
-                  } else {
-                    // add it to a hole
-                    hole.add(LatLng(coords[1] as double, coords[0] as double));
-                  }
-                }
-                if (pathIndex > 0) {
-                  // add to polygon's list of holes
-                  holesList.add(hole);
-                }
-                pathIndex++;
-              }
-              polygons.add(polygonCreationCallback!(outerRing, holesList,
-                  f['properties'] as Map<String, dynamic>));
-            }
-          }
-          break;
-      }
+        }
+        break;
     }
     return;
   }
